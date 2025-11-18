@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv/
+chroma_db/
+*.log
+.DS_Store
+.vscode
+.claude
+uv.lock

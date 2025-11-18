@@ -1,0 +1,26 @@
+[project]
+name = "zhipu-mem0"
+version = "0.1.0"
+description = "智谱AI对话系统集成LangChain和Mem0"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "langchain>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langchain-community>=0.3.0",
+    "mem0ai>=0.1.0",
+    "chromadb>=0.4.0",
+    "onnxruntime>=1.16.0,<1.19.0",
+    "zhipuai>=2.0.0",
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+    "python-dotenv>=1.0.0",
+    "streamlit>=1.30.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
