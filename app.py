@@ -3,6 +3,7 @@ from langchain_community.chat_models import ChatZhipuAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 import config
 from memory_manager import MemoryManager
+from search_tool import SearchTool
 from datetime import datetime
 import time
 
@@ -233,6 +234,12 @@ if "show_memories" not in st.session_state:
 if "context_limit" not in st.session_state:
     st.session_state.context_limit = 5
 
+if "search_tool" not in st.session_state:
+    st.session_state.search_tool = SearchTool()
+
+if "use_search" not in st.session_state:
+    st.session_state.use_search = False
+
 # 主标题
 st.markdown('<h1 class="main-header">🤖 AI对话系统</h1>', unsafe_allow_html=True)
 st.markdown('<p class="subtitle">基于 GLM-4-Flash 和 Mem0 的智能对话助手</p>', unsafe_allow_html=True)
@@ -263,6 +270,26 @@ with st.sidebar:
             value=5,
             help="每次对话使用的历史记忆数量"
         )
+    
+    # 搜索设置
+    with st.expander("🔍 搜索设置"):
+        use_search_new = st.checkbox("启用网络搜索", value=st.session_state.use_search, help="使用 SearXNG 进行网络搜索")
+        
+        if use_search_new != st.session_state.use_search:
+            st.session_state.use_search = use_search_new
+            if use_search_new:
+                with st.spinner("初始化搜索工具..."):
+                    if st.session_state.search_tool.initialize():
+                        st.session_state.search_tool.enabled = True
+                        st.success("✓ 搜索工具已启用")
+                    else:
+                        st.error("✗ 搜索工具初始化失败")
+                        st.session_state.use_search = False
+            else:
+                st.session_state.search_tool.enabled = False
+        
+        if st.session_state.use_search:
+            st.info("💡 AI 可以使用网络搜索获取实时信息")
 
     # 模型设置
     with st.expander("🔧 模型设置"):
@@ -496,19 +523,45 @@ if prompt := st.chat_input("💭 输入你的消息..."):
 
         # 调用 LLM - 使用流式输出
         try:
-            # 创建一个占位符用于流式显示
             message_placeholder = st.empty()
             full_response = ""
-
-            # 使用 stream 方法进行流式输出
-            for chunk in st.session_state.llm.stream(messages):
-                if hasattr(chunk, 'content') and chunk.content:
-                    full_response += chunk.content
-                    # 添加打字机效果（光标）
-                    message_placeholder.markdown(full_response + "▌")
-
-            # 显示最终结果（移除光标）
-            message_placeholder.markdown(full_response)
+            
+            if st.session_state.use_search and st.session_state.search_tool.enabled:
+                from langchain.agents import create_tool_calling_agent, AgentExecutor
+                from langchain_core.prompts import ChatPromptTemplate
+                
+                tools = st.session_state.search_tool.get_tools()
+                
+                if tools:
+                    prompt_template = ChatPromptTemplate.from_messages([
+                        ("system", "你是一个友好、专业的AI助手。如果需要最新信息，可以使用搜索工具。"),
+                        ("placeholder", "{chat_history}"),
+                        ("human", "{input}"),
+                        ("placeholder", "{agent_scratchpad}"),
+                    ])
+                    
+                    agent = create_tool_calling_agent(st.session_state.llm, tools, prompt_template)
+                    agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
+                    
+                    result = agent_executor.invoke({
+                        "input": prompt,
+                        "chat_history": messages[:-1]
+                    })
+                    
+                    full_response = result.get("output", "")
+                    message_placeholder.markdown(full_response)
+                else:
+                    for chunk in st.session_state.llm.stream(messages):
+                        if hasattr(chunk, 'content') and chunk.content:
+                            full_response += chunk.content
+                            message_placeholder.markdown(full_response + "▌")
+                    message_placeholder.markdown(full_response)
+            else:
+                for chunk in st.session_state.llm.stream(messages):
+                    if hasattr(chunk, 'content') and chunk.content:
+                        full_response += chunk.content
+                        message_placeholder.markdown(full_response + "▌")
+                message_placeholder.markdown(full_response)
 
             # 保存助手回复到历史
             st.session_state.messages.append({"role": "assistant", "content": full_response})
