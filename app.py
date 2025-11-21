@@ -1,6 +1,6 @@
 import streamlit as st
 from langchain_community.chat_models import ChatZhipuAI
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
 import config
 from memory_manager import MemoryManager
 from search_tool import SearchTool
@@ -220,9 +220,9 @@ if "user_id" not in st.session_state:
 
 if "llm" not in st.session_state:
     st.session_state.llm = ChatZhipuAI(
-        model="glm-4-flash",
+        model=config.LLM_MODEL,
         api_key=config.ZHIPU_API_KEY,
-        temperature=0.7,
+        temperature=config.LLM_TEMPERATURE,
     )
 
 if "memory_manager" not in st.session_state:
@@ -497,7 +497,13 @@ if prompt := st.chat_input("💭 输入你的消息..."):
     # 生成助手回复
     with st.chat_message("assistant"):
         # 构建消息
-        messages = [SystemMessage(content="你是一个友好、专业的AI助手，擅长理解用户需求并提供有帮助的回答。")]
+        system_prompt = "你是一个友好、专业的AI助手，擅长理解用户需求并提供有帮助的回答。"
+
+        # 如果启用了搜索功能，添加关于引用来源的指示
+        if st.session_state.use_search and st.session_state.search_tool.enabled:
+            system_prompt += "\n\n当你使用搜索工具获取信息时，请务必在回复末尾列出信息来源，格式如下：\n\n**参考来源：**\n- [标题](URL)\n\n确保每条新闻或信息都附带其原始链接，让用户可以查看原文。"
+
+        messages = [SystemMessage(content=system_prompt)]
 
         # 添加记忆上下文
         if use_memory:
@@ -521,35 +527,52 @@ if prompt := st.chat_input("💭 输入你的消息..."):
         # 添加当前用户消息
         messages.append(HumanMessage(content=prompt))
 
-        # 调用 LLM - 使用流式输出
+        # 调用 LLM
         try:
             message_placeholder = st.empty()
             full_response = ""
             
             if st.session_state.use_search and st.session_state.search_tool.enabled:
-                from langchain.agents import create_tool_calling_agent, AgentExecutor
-                from langchain_core.prompts import ChatPromptTemplate
-                
                 tools = st.session_state.search_tool.get_tools()
                 
                 if tools:
-                    prompt_template = ChatPromptTemplate.from_messages([
-                        ("system", "你是一个友好、专业的AI助手。如果需要最新信息，可以使用搜索工具。"),
-                        ("placeholder", "{chat_history}"),
-                        ("human", "{input}"),
-                        ("placeholder", "{agent_scratchpad}"),
-                    ])
-                    
-                    agent = create_tool_calling_agent(st.session_state.llm, tools, prompt_template)
-                    agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
-                    
-                    result = agent_executor.invoke({
-                        "input": prompt,
-                        "chat_history": messages[:-1]
-                    })
-                    
-                    full_response = result.get("output", "")
-                    message_placeholder.markdown(full_response)
+                    llm_with_tools = st.session_state.llm.bind_tools(tools)
+
+                    with st.spinner("🤔 思考中..."):
+                        response = llm_with_tools.invoke(messages)
+
+                    if response.tool_calls:
+                        for tool_call in response.tool_calls:
+                            tool_name = tool_call["name"]
+                            tool_args = tool_call["args"]
+
+                            # 在搜索查询中添加当前日期，确保获取最新结果
+                            if "query" in tool_args:
+                                current_date = datetime.now().strftime("%Y年%m月%d日")
+                                weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+                                current_weekday = weekday_names[datetime.now().weekday()]
+                                tool_args["query"] = f"{tool_args['query']} {current_date} {current_weekday}"
+
+                            with st.spinner(f"🔍 使用 {tool_name} 搜索中..."):
+                                for tool in tools:
+                                    if tool.name == tool_name:
+                                        # 使用异步调用
+                                        tool_result = st.session_state.search_tool._loop.run_until_complete(
+                                            tool.ainvoke(tool_args)
+                                        )
+                                        messages.append(AIMessage(content=response.content, tool_calls=response.tool_calls))
+                                        messages.append(ToolMessage(content=tool_result, tool_call_id=tool_call["id"]))
+                                        break
+
+                        # 使用流式输出生成回复
+                        for chunk in st.session_state.llm.stream(messages):
+                            if hasattr(chunk, 'content') and chunk.content:
+                                full_response += chunk.content
+                                message_placeholder.markdown(full_response + "▌")
+                        message_placeholder.markdown(full_response)
+                    else:
+                        full_response = response.content
+                        message_placeholder.markdown(full_response)
                 else:
                     for chunk in st.session_state.llm.stream(messages):
                         if hasattr(chunk, 'content') and chunk.content:

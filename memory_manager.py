@@ -16,7 +16,7 @@ class MemoryManager:
             "llm": {
                 "provider": "openai",
                 "config": {
-                    "model": "glm-4-flash",
+                    "model": config.LLM_MODEL,
                     "temperature": 0.2,
                     "max_tokens": 1500,
                 }
@@ -24,7 +24,7 @@ class MemoryManager:
             "embedder": {
                 "provider": "openai",
                 "config": {
-                    "model": "embedding-3",
+                    "model": config.EMBEDDING_MODEL,
                 }
             },
             "vector_store": {
